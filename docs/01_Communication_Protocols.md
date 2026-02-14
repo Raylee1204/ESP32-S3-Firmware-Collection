@@ -1,92 +1,95 @@
-# Embedded Communication Protocols: UART, I2C, and SPI
+# Module 01: Communication Protocols (UART, I2C, SPI)
 
-## 1. Overview
-本模組實作了嵌入式系統中最常見的三種串列通訊協定：UART、I2C 與 SPI。透過兩塊 ESP32-S3 開發板 (Master/Slave 架構)，驗證了不同協定的時序特性與應用場景。
+本模組實作了嵌入式系統中最常見的三種串列通訊協定。透過 ESP32-S3 的實作 (Master/Slave 架構)，驗證了不同協定的硬體特性、時序邏輯與應用場景。
 
-| Protocol | Type | Architecture | Duplex | Speed | Wiring | Application |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **UART** | Asynchronous | Peer-to-Peer | Full | Low-Med | 2 (TX/RX) | Debug, GSM/GPS Modems |
-| **I2C** | Synchronous | Multi-Master | Half | Med | 2 (SDA/SCL) | Sensors, EEPROM |
-| **SPI** | Synchronous | Master-Slave | Full | High | 4 (MOSI/MISO...) | Displays, Flash, ADCs |
+## 1. Protocol Comparison (協定比較)
+
+| Feature | UART | I2C | SPI |
+| :--- | :--- | :--- | :--- |
+| **Full Name** | Universal Asynchronous Receiver Transmitter | Inter-Integrated Circuit | Serial Peripheral Interface |
+| **Type** | **Asynchronous (非同步)**<br>無 Clock 線，依賴 Baud Rate | **Synchronous (同步)**<br>依賴 SCL 線同步 | **Synchronous (同步)**<br>依賴 SCLK 線同步 |
+| **Architecture** | Peer-to-Peer (點對點) | Multi-Master (多主從)<br>Shared Bus | Master-Slave (主從)<br>Dedicated Select Lines |
+| **Duplex** | **Full-Duplex (全雙工)**<br>TX/RX 獨立通道 | **Half-Duplex (半雙工)**<br>SDA 線路分時共用 | **Full-Duplex (全雙工)**<br>MOSI/MISO 獨立通道 |
+| **Speed** | Low (< 1 Mbps) | Medium (100kHz - 3.4MHz) | High (> 10 MHz) |
+| **Wires** | 2 (TX, RX) | 2 (SDA, SCL) | 4 (MOSI, MISO, SCLK, CS) |
 
 ---
 
 ## 2. UART (Universal Asynchronous Receiver Transmitter)
 
-### 2.1 Theoretical Basis
-[cite_start]UART 是一種非同步傳輸協定，雙方不共用時脈訊號，因此必須約定好 **鮑率 (Baud Rate)** 以確保取樣正確 [cite: 21, 240]。
+### 2.1 Technical Analysis
+UART 是一種非同步傳輸協定。由於沒有共用的時脈訊號 (Clock)，通訊雙方必須嚴格約定好 **鮑率 (Baud Rate)** 以確保取樣時機正確。
 
-* **Frame Structure**:
-    * [cite_start]**Idle**: High Voltage (Logic 1)[cite: 239].
-    * [cite_start]**Start Bit**: Pull Low (Logic 0) to synchronize[cite: 239].
-    * [cite_start]**Data Bits**: 8 bits, transmitted **LSB First**[cite: 55, 237].
-    * **Parity**: None (in our lab).
-    * [cite_start]**Stop Bit**: Pull High (Logic 1) to end frame.
+* **Idle State (閒置狀態)**: 線路預設保持 **High (Logic 1)** 電位，以區別「閒置」與「斷線」。
+* **Start Bit (起始位元)**: 傳輸開始時，發送端將線路拉低 **Low (Logic 0)**，喚醒接收端開始計時。
+* **Data Bits**: 傳輸 8 bits 資料，遵循 **LSB First (最低有效位先傳)** 的規則。
+* **Parity Bit (校驗位)**: (本實驗未啟用) 可選擇奇/偶校驗來檢查位元錯誤。
+* **Stop Bit (停止位)**: 傳輸結束後，將線路拉回 **High (Logic 1)**，讓接收端有時間處理資料並回到閒置狀態。
 
-![UART Timing](assets/uart_timing.png)
-[cite_start]*(Ref: UART data transmission format )*
+<img width="1386" height="207" alt="image" src="https://github.com/user-attachments/assets/6af8a356-0406-414d-b414-77f63c3e7141" />
 
-### 2.2 ESP32 Implementation Details
-在 `Serial_Bridge` 模組中，我們配置了兩組 UART：
-* **UART0 (USB Serial)**: 用於 Debug Log (Baud: 115200).
-* **UART1/2 (Inter-chip)**: 用於雙機通訊。
+*(Figure: UART 訊號波形圖)*
 
-**關鍵設定 (Configuration):**
-* **Baud Rate**: 115200 bps. 
-    * [cite_start]*Engineering Note:* 根據講義公式 $1/BaudRate$ [cite: 240]，每個 bit 的傳輸時間約為 8.68 µs。若雙方時脈誤差超過 5%，可能導致 Frame Error。
-* **Pin Definition**: 
-    * [cite_start]TX (GPIO 17) -> RX (GPIO 16).
-    * RX (GPIO 16) -> TX (GPIO 17).
-    * **GND 共地**：這是新手常犯錯誤，UART 為電壓準位訊號，必須共地才能判讀 Logic 0/1。
+### 2.2 ESP32 Implementation
+* **Baud Rate**: 設定為 **115200 bps**。
+    * *Calculation*: 每個 Bit 的傳輸時間 $T_{bit} = 1 / 115200 \approx 8.68 \mu s$。
+* **Pin Configuration**:
+    * **TX**: GPIO 17 (Connect to Peer RX)
+    * **RX**: GPIO 16 (Connect to Peer TX)
+    * **Ground**: 雙方 GND 必須相連以建立共同參考電位。
 
 ---
 
 ## 3. I2C (Inter-Integrated Circuit)
 
-### 3.1 Theoretical Basis
-[cite_start]I2C 使用 **Open-Drain (開汲極)** 架構，這意味著 Master/Slave 只能將線路「拉低 (Drive Low)」，高電位需靠 **Pull-up Resistor (上拉電阻)** 維持 。
+### 3.1 Technical Analysis
+I2C 採用 **Open-Drain (開汲極)** 輸出架構，這意味著裝置只能主動將線路拉低 (Drive Low)，無法主動推高。高電位必須依靠外部的 **Pull-up Resistor (上拉電阻)** 來維持。
 
-* [cite_start]**Addressing**: 7-bit address + 1-bit R/W flag[cite: 214].
-* [cite_start]**Handshaking**: 每一 Byte 傳輸後，接收方必須回傳 **ACK (Low)**，否則發送方視為 **NACK (High)** 並停止傳輸[cite: 207, 218].
+* **Wired-AND Logic**: 若多個裝置同時輸出，只要有一方輸出 Low，整條線路即為 Low。此特性用於實現 **仲裁 (Arbitration)** 與 **Clock Stretching**。
+* **Start Condition**: 當 `SCL` 為 High 時，`SDA` 由 High 轉 Low。
+* **Stop Condition**: 當 `SCL` 為 High 時，`SDA` 由 Low 轉 High。
+* **Addressing**: 採用 7-bit Address 模式，Master 發送的第一個 Byte 包含 `[7-bit Address] + [1-bit R/W]`。
+* **ACK/NACK**: 每傳輸 8 bits，接收方需在第 9 個 Clock 週期將 `SDA` 拉低回應 ACK。
 
-![I2C Hardware](assets/i2c_hardware.png)
-[cite_start]*(Ref: I2C Open-Drain Structure )*
+<img width="1209" height="378" alt="image" src="https://github.com/user-attachments/assets/d449c046-a9e7-46d8-ba76-140ebd82bf37" />
 
-### 3.2 ESP32 Implementation Details
-本實驗實作了 **I2C Scanner** 與 **Master-Slave Command**。
+*(Figure: I2C 架構與上拉電阻示意圖)*
 
-* **Hardware Setup**:
-    * [cite_start]SDA (GPIO 8) / SCL (GPIO 9)[cite: 157, 159].
-    * **Pull-up**: ESP32 內部雖有弱上拉，但在高速 (400kHz) 下建議外掛 $2.2k\Omega - 4.7k\Omega$ 電阻以改善訊號上升時間 (Rise Time)。
-* **Software Logic (Address Scanning)**:
-    * Master 發送 `Start Condition` + `Address (0x00 ~ 0x7F)` + `Write bit`.
-    * [cite_start]若收到 `ACK` [cite: 216]，代表該位址有設備存在。
-    * [cite_start]本實驗掃描到 Slave Address 為 `0x12` [cite: 165]。
+### 3.2 ESP32 Implementation
+本實驗實作了 I2C Scanner 與 Master-Slave 通訊。
+
+* **Hardware**:
+    * **SDA**: GPIO 8
+    * **SCL**: GPIO 9
+    * **Pull-up**: 啟用內部 Pull-up 或外接 4.7kΩ 電阻。
+* **Logic**:
+    * Master 透過迴圈發送寫入請求至 `0x00` - `0x7F`。
+    * 若收到 ACK，則判定該位址有 Slave 裝置 (本實驗 Slave Address 為 `0x12`)。
 
 ---
 
 ## 4. SPI (Serial Peripheral Interface)
 
-### 4.1 Theoretical Basis
-[cite_start]SPI 是基於 **Shift Register (移位暫存器)** 的環形交換系統 。Master 推出一個 bit 的同時，Slave 也推回一個 bit。
+### 4.1 Technical Analysis
+SPI 是基於 **Shift Register (移位暫存器)** 的環形交換系統。Master 與 Slave 內部各有一個暫存器，隨著 Clock 的脈衝，資料在兩者之間循環移位。
 
-* [cite_start]**4 Modes (CPOL/CPHA)**[cite: 228]:
-    * 決定 Clock 的極性 (Idle High/Low) 與取樣邊緣 (Rising/Falling)。
-    * [cite_start]本實驗採用 **Mode 0 (CPOL=0, CPHA=0)**，即 Idle Low，上升緣取樣 [cite: 231]。
+* **Full-Duplex**: 在同一個 Clock 週期內，Master 透過 `MOSI` 送出一位元，同時讀取 `MISO` 傳回的一位元。
+* **4 Modes (CPOL/CPHA)**: 決定 Clock 的極性與取樣邊緣。
+    * 本實驗採用 **Mode 0 (CPOL=0, CPHA=0)**。
+    * **CPOL=0**: Clock Idle 時為 Low。
+    * **CPHA=0**: 在 Clock 的第一個邊緣 (Rising Edge) 讀取資料 (Sample)，在第二個邊緣 (Falling Edge) 改變資料 (Setup)。
 
-![SPI Shift Register](assets/spi_shift_register.png)
-[cite_start]*(Ref: SPI Master-Slave Shift Register Data Exchange )*
+<img width="591" height="443" alt="image" src="https://github.com/user-attachments/assets/3dd4acd7-92dc-453d-aaff-17316d16d781" />
 
-### 4.2 ESP32 Implementation Details
-[cite_start]實驗目標為 Master 控制 Slave 的 LED 閃爍 [cite: 175]。
+*(Figure: SPI 主從端資料交換示意圖)*
 
-* **Hardware Setup**:
-    * [cite_start]MOSI (GPIO 11), MISO (GPIO 13), SCLK (GPIO 12), CS (GPIO 10) [cite: 177-184].
-* **Performance Note**:
-    * [cite_start]SPI 為 **Full-Duplex (全雙工)** [cite: 225]，傳輸速率可達數十 MHz。在 ESP32 上，我們使用硬體 SPI (HSPI/VSPI) 以達到最大吞吐量，而非軟體模擬 (Bit-banging)。
-    * [cite_start]Slave 端使用 `ESP32SPISlave` 函式庫 [cite: 190] 利用中斷處理高速數據流，避免 CPU 阻塞。
+### 4.2 ESP32 Implementation
+實驗目標為透過 Master 控制 Slave 端的 LED 狀態。
 
----
-
-## 5. Logic Analyzer Analysis (Optional)
-(若有邏輯分析儀截圖可放在此處，驗證 Start Bit, ACK, Clock 頻率是否符合預期)
+* **Pin Configuration**:
+    * **MOSI**: GPIO 11 (Master Out Slave In)
+    * **MISO**: GPIO 13 (Master In Slave Out)
+    * **SCLK**: GPIO 12 (Serial Clock)
+    * **CS/SS**: GPIO 10 (Chip Select, Active Low)
+* **Driver Note**:
+    * Slave 端使用 `ESP32SPISlave` 函式庫，利用中斷 (Interrupt) 處理高速 SPI 傳輸，確保資料不遺失。
