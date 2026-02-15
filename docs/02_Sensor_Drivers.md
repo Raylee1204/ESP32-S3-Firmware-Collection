@@ -30,6 +30,7 @@ MPU-9255 是一個 SiP (System in Package)，內部封裝了兩個晶片：
     * *Convert*: $Gyro\_dps = Raw / 131$ (若 Scale = $\pm 250^\circ/s$)。
 * **Magnetometer Calibration**:
     * 實作 **Figure-8 Calibration (八字繞圈校正)**，找出三軸的最大/最小值，計算 Hard Iron Offset 並從讀值中扣除。
+<img width="880" height="521" alt="image" src="https://github.com/user-attachments/assets/be8356fe-0c93-42be-a87b-ac8defeded97" />
 
 ---
 
